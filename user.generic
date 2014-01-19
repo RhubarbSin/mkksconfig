@@ -1,0 +1,2 @@
+# users for user=generic or user=std
+user --name=tech --password=$1$oeqC7gv0$p8hex0J3yvtrDxcoPVkTI/ --iscrypted --shell=/bin/bash

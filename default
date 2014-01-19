@@ -1,0 +1,5 @@
+default example
+label example
+  kernel centos/6/x86_64/vmlinuz
+  append initrd=centos/6/x86_64/initrd.img method=nfs:10.1.0.1:/srv/nfs/CentOS/6/os/x86_64 ksdevice=bootif ks=nfs:10.1.0.1:/tftpboot/linux-install/centos/dynamic.ks user=std pkg=std part=std pw=root!!! post=generic email=kickstart@example.com
+  ipappend 2

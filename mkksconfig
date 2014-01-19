@@ -1,0 +1,343 @@
+#!/bin/bash
+#
+# mkksconfig: write kickstart config based on environment variables;
+# intended to be called from %pre section of a generic kickstart file
+#
+# 	$Id: mkksconfig,v 1.23 2014/01/19 20:42:51 netinstall Exp $
+#
+########################################################################
+#
+# Environment variables that determine this script's effects:
+#
+# bl - location of boot loader (mbr, partition)
+# part - partitioning scheme (generic, raid0, raid1, default...)
+# sp - spare drives for RAID
+# lvm - whether to use LVM (yes, no); "YES" IS IGNORED FOR RAID (FIXME)
+# user - user accounts (itc, generic, default...)
+# pkg - package selection (itc, generic, default...)
+# swap - swap size (in MB or multiple of RAM size)
+# pw - root password (cleartext)
+# post - post-installation script (itc, generic...)
+# fb - whether to start system reconfiguration tool on first boot (yes, no)
+# email - e-mail address to receive notification of completion
+#
+########################################################################
+
+BASE_URL="http://10.1.0.1"
+
+function abort() {
+    cat <<EOF
+------------------------------------------------------------------------
+INSTALLATION ABORTED
+${1:-no message specified}
+------------------------------------------------------------------------
+EOF
+    sleep 666d
+}
+
+########################################################################
+#
+# Try to label drives over 2 TB with EFI disk label, others with MS-DOS.
+#
+
+function label_disks() {
+    # array of disk names
+    DISKS=( $(list-harddrives | cut -f1 -d' ') )
+    # array of disk sizes in MB (omit decimal portion)
+    SIZES=( $(list-harddrives | sed -e 's/.* \(.*\)\..*/\1/') )
+    # comma-separated list of disks for other functions
+    DISKLIST=$(echo ${DISKS[@]} | sed -e 's/ /,/g')
+    # count of disks for loop
+    DISKCOUNT=${#DISKS[@]}
+
+    (( DISKCOUNT )) || abort "No hard drives found"
+    for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
+        DISK=${DISKS[$INDEX]}
+        SIZE=${SIZES[$INDEX]}
+
+        if [ "$SIZE" -gt 2000000 ]; then
+            LABEL="gpt"
+        else
+            LABEL="msdos"
+        fi
+
+        echo -e "Disk: $DISK, Label: $LABEL, Result: \c"
+        if parted -s /dev/$DISK mklabel "$LABEL"; then
+            echo "success"
+        else
+            echo "failure"
+            abort "Failed to label $DISK"
+        fi
+    done
+}
+
+########################################################################
+
+function print_usage() {
+    cat <<EOF
+Usage: $0 FILENAME
+
+Write partial kickstart configuration to FILENAME.
+
+Consult comments in script for details.
+EOF
+}
+
+function get_config_name() {
+    # $1: name of kickstart config file to be written
+
+    if [ -n "$1" ]; then
+        CONFIG="$1"
+        echo "File name: $CONFIG"
+    else
+        print_usage
+        exit 1
+    fi
+}
+
+########################################################################
+
+function write_common() {
+    cat <<EOF > "$CONFIG"
+authconfig --enableshadow --enablemd5
+selinux --disabled
+firewall --enabled
+skipx
+zerombr
+EOF
+}
+
+########################################################################
+
+function write_rootpw() {
+    echo "Root password: $1"
+    echo "rootpw $1" >> "$CONFIG"
+}
+
+########################################################################
+
+function write_firstboot() {
+    [ -z "$1" ] && return
+    if [ "$1" == "1" -o "$1" == "on" -o "$1" == "yes" ]; then
+        echo firstboot >> "$CONFIG"
+    fi
+}
+
+########################################################################
+
+function write_bootloader() {
+    # $1: location of bootloader
+
+    if [ "$LABEL" == "gpt" ]; then
+        BOOTLOC="partition"
+    elif [ "$1" == "mbr" -o "$1" == "partition" ]; then
+        BOOTLOC="$1"
+    else
+        abort "Invalid value for bl: $1"
+    fi
+    echo "Boot loader location: $BOOTLOC"
+    echo "bootloader --location=$BOOTLOC --driveorder=$DISKLIST" >> "$CONFIG"
+}
+
+########################################################################
+
+function write_clearpart() {
+    echo "clearpart --all --initlabel --drives=$DISKLIST" >> "$CONFIG"
+}
+
+########################################################################
+#
+# Partition/LVM/filesystem configuration.
+#
+
+function calculate_swap() {
+    [ -z "$1" ] && return
+    if GREPPED=$(echo "$1" | egrep '^[0-9]*$'); then
+        # value of swap is an integer: size in MB
+        SWAPSIZE="$GREPPED"
+    elif GREPPED=$(echo "$1" | egrep '^[0-9]*x$'); then
+        # value of swap is an integer followed by "x": multiplication factor
+        SWAPFACTOR="${GREPPED%%x}"
+        # size of memory in MB
+        MEMSIZE=$(( $(sed -e '/^MemTotal/!d;s/^.* \([0-9]*\) .*/\1/' /proc/meminfo) / 1000 ))
+        SWAPSIZE=$(( MEMSIZE * SWAPFACTOR ))
+    else
+        abort "Invalid value for swap: $1"
+    fi
+}
+
+function write_raid() {
+    # $1: RAID level for LVM's physical volume
+    # $2 (optional): number of spare drives to be allocated
+
+    for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
+        DISK=${DISKS[$INDEX]}
+        RAIDBOOT[$INDEX]="raid.${INDEX}1"
+        RAIDPV[$INDEX]="raid.${INDEX}2"
+        RAIDROOT[$INDEX]="raid.${INDEX}3"
+        cat <<EOF >> "$CONFIG"
+part ${RAIDBOOT[$INDEX]} --size 200 --asprimary --ondisk=$DISK
+part ${RAIDPV[$INDEX]} --size 1 --grow --asprimary --ondisk=$DISK
+EOF
+    done
+    cat <<EOF >> "$CONFIG"
+raid /boot --device md0 --level=1 ${RAIDBOOT[*]}
+raid pv.01 --device md1 --level=$1 --spares=${2:-0} ${RAIDPV[*]}
+volgroup VolGroup00 pv.01
+logvol / --vgname=VolGroup00 --size=1 --grow --name=LogVol00
+logvol swap --vgname=VolGroup00 $SWAPSTR --name=LogVol01
+EOF
+}
+
+function write_part() {
+    # $1: type of partition scheme
+    # $2: whether to use LVM
+    # $3 (optional): number of spare drives for RAID
+
+    calculate_swap "$swap"
+    if [ -n "$SWAPSIZE" ]; then
+        echo "Swap size: $SWAPSIZE MB"
+        SWAPSTR="--size $SWAPSIZE"
+    else
+        SWAPSTR="--recommended"
+    fi
+
+    case "$1" in
+        generic | std)
+            if [ "$2" == "1" -o "$2" == "on" -o "$2" == "yes" ]; then
+                cat <<EOF >> "$CONFIG"
+part /boot --size 200 --asprimary --ondisk=${DISKS[0]}
+part pv.01 --size 1 --grow --asprimary --ondisk=${DISKS[0]}
+volgroup VolGroup00 pv.01
+logvol / --vgname=VolGroup00 --size=1 --grow --name=LogVol00
+logvol swap --vgname=VolGroup00 $SWAPSTR --name=LogVol01
+EOF
+            else
+                cat <<EOF >> "$CONFIG"
+part /boot --size 200 --asprimary --ondisk=${DISKS[0]}
+part / --size 1 --grow --asprimary --ondisk=${DISKS[0]}
+part swap $SWAPSTR --asprimary --ondisk=${DISKS[0]}
+EOF
+            fi
+            ;;
+        raid0)
+            write_raid 0 0
+            ;;
+        raid1)
+            write_raid 1 "$3"
+            ;;
+        raid5)
+            write_raid 5 "$3"
+            ;;
+        raid6)
+            write_raid 6 "$3"
+            ;;
+        "")
+            echo "autopart" >> "$CONFIG"
+            ;;
+        *)
+            abort "Invalid value for part: $1"
+    esac
+}
+
+########################################################################
+
+function write_user() {
+    # $1: category of user accounts to be defined
+
+    [ -z "$1" ] && return
+    USERFILE="user.$1"
+    URL="${BASE_URL}/linux-install/centos/$USERFILE"
+    wget -q -O - "$URL" >> "$CONFIG"
+    if [ $? -ne 0 ]; then
+        abort "Invalid value \"$1\" for user ($USERFILE not found at $URL)"
+    fi
+}
+
+########################################################################
+
+function write_packages() {
+    # $1: choice of package definition
+
+    [ -z "$1" ] && return
+    echo "%packages" >> "$CONFIG"
+    PKGFILE="pkg.$1"
+    URL="${BASE_URL}/linux-install/centos/$PKGFILE"
+    wget -q -O - "$URL" >> "$CONFIG"
+    if [ $? -ne 0 ]; then
+        abort "Invalid value \"$1\" for pkg ($PKGFILE not found at $URL)"
+    fi
+}
+
+########################################################################
+
+function write_post() {
+    # $1: (optional) suffix of post-installation script
+    # $2: (optional) e-mail address for notification of completion
+
+    # post-installation scripts are named "postinstall-*"
+    PREFIX=postinstall
+    if [ -n "$1" ]; then
+        POSTFILE="$PREFIX-$1"
+        echo "Post-installation script: $POSTFILE"
+    else
+        echo "No post-installation script specified; none will be used."
+    fi
+
+    cat <<EOF >> "$CONFIG"
+%post
+#
+# echo output to virtual console 6 and to log file
+#
+exec < /dev/tty6 > /dev/tty6
+(
+chvt 6
+EOF
+
+    if [ -n "$POSTFILE" ]; then
+        URL="${BASE_URL}/linux-install/postinstall/$POSTFILE"
+        wget -q -O /dev/null "$URL" || \
+            abort "Invalid value \"$1\" for post ($POSTFILE not found at $URL)"
+        # post-installation script
+        cat <<EOF >> "$CONFIG"
+wget -nv -O - $URL | bash
+EOF
+    fi
+
+    if [ -n "$2" ]; then
+        # e-mail notification
+        URL="${BASE_URL}/linux-install/postinstall/send-email.py"
+        cat <<EOF >> "$CONFIG"
+wget -nv -O - $URL | python - $2
+EOF
+    fi
+
+    cat <<EOF >> "$CONFIG"
+# kickstart's "reboot" option is unreliable
+# ...unfortunately, this can do bad things to md devices...
+# sync; sync; echo b > /proc/sysrq-trigger
+chvt 1
+) 2>&1 | tee /root/${POSTFILE}.log
+EOF
+}
+
+########################################################################
+#
+# main
+#
+
+# show environment for debugging
+env | grep ^[a-z]
+
+label_disks
+
+get_config_name $1
+write_common
+write_rootpw "${pw:-root!!!}"
+write_firstboot "$fb"
+write_bootloader "${bl:-mbr}"
+write_clearpart
+write_part "$part" "${lvm:-no}" "$sp"
+write_user "$user"
+write_packages "$pkg"
+write_post "$post" "$email"

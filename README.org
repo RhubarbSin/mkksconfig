@@ -1,0 +1,61 @@
+#+TITLE: Framework for RHEL/CentOS/etc. kickstart
+
+* Example files
+  - =default= :: kickstart file specified by the DHCP/BOOTP server; instructs PXE client to load =dynamic.ks=
+  - =dynamic.ks= :: baseline kickstart file that downloads and executes =mkksconfig=
+  - =mkksconfig= :: script that completes the kickstart configuration by creating =/tmp/custom.ks= based on default values and kernel arguments
+  - =pkg.generic= :: list of default packages to be installed during installation
+  - =user.generic= :: definitions of default users to be added during installation
+
+References to /installation directory/ refer to the location of =mkksconfig=.
+
+* Kernel command-line arguments
+  These are the available options as of this writing; they can be gleaned from an inspection of =mkksconfig=. The names of the kickstart options (the keywords used in the kickstart file) affected by each argument are shown in *bold*. When not set by kernel arguments, default values used for the relevant kickstart options are generally Anaconda's defaults (e.g., =mbr= for =bootloader=). The following values are synonymous:
+  - =generic=, =std=
+  - =yes=, =on=, =1=
+  - =no=, =off=, =0=
+** =pw=
+   *rootpw*; specifies the root password. Default is the System Administrator's highly secure /Super Secret Passphrase/.
+** =fb=
+   *firstboot*
+   - =fb=yes= :: start the Setup Agent the first time the system is booted
+   - =fb=no= :: do not start the Setup Agent the first time the system is booted
+** =bl=
+   *bootloader*
+   - =bl=mbr= :: install the boot loader on master boot record of all disks
+   - =bl=part= :: install the boot loader on the first sector of each partition containing the kernel
+** =lvm=
+   *part*, *volgroup*, *logvol*
+   - =lvm=yes= :: use LVM for swap and non-boot filesystems
+   - =lvm=no= :: use primary partitions for swap and non-boot filesystems
+   Default behavior does not use LVM, but /this argument is ignored for RAID/ (see =part= below), which always uses LVM.
+** =part=
+   *autopart*, *part*, *raid*, *volgroup*, *logvol*
+   - =part=std= :: install only on first disk (this nonetheless clears partitions on /all/ disks, though)
+   - =part=raid0= :: software RAID 0 device across all disks
+   - =part=raid1= :: software RAID 1 device across all disks
+   - =part=raid5= :: software RAID 5 device across all disks
+   - =part=raid6= :: software RAID 6 device across all disks
+   Default behavior writes *autopart* (which on CentOS 6 creates a separate =/home=) to avoid switching to interactive mode.
+** =sp=
+   *spares* with the *raid* option; specifies the number of spare disks in the RAID device for RAID levels 1, 5, 6.
+** =user=
+   *user*; users added are determined by contents of installation directory's =user.*= files. For a new =user= value, just add a new =user.*= file.
+   - =user=std= :: add =tech= account
+   - =user=itc= :: add =tech= account and accounts for ITC administrators
+   Default behavior adds no user accounts.
+** =pkg=
+   *%packages*; packages added are determined by contents of =install.mycolo.biz:/tftpboot/linux-install/centos/pkg.*= files. For a new =pkg= value, just add a new =pkg.*= file.
+   - =pkg=std= :: add standard packages (intended for =post=std=)
+   - =pkg=browser= :: add standard packages and web browser (intended for =post=std=); intended for remote display and not really a "browser" configuration (CentOS 6)
+   - =pkg=itc= :: add packages for ITC configurations (intended for =post=itc=)
+   - =pkg=cpanel= :: exclude packages unwanted for WHM/cPanel (intended for =post=cpanel=)
+** =swap=
+   *logvol swap* or *part swap*; specifies the swap size in megabytes or a factor by which to multiply the RAM size, followed by =x= (i.e. =swap=4x= will configure four times as much swap space as the size of physical memory).
+** =post=
+   *%post*
+   - =post=std= :: use =postinstall-std= post-installation script
+   - =post=itc= :: use =postinstall-itc= post-installation script
+   - =post=cpanel= :: use =postinstall-cpanel= post-installation script
+** =email=
+   Specifies e-mail address for notification upon completion of installation.
