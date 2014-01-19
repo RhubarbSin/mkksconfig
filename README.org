@@ -1,4 +1,4 @@
-#+TITLE: Framework for RHEL/CentOS/etc. kickstart
+#+TITLE: Framework for dynamic generated RHEL/CentOS/etc. kickstart
 
 * Example files
   - =default= :: kickstart file specified by the DHCP/BOOTP server; instructs PXE client to load =dynamic.ks=
