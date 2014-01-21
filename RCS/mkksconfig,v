@@ -1,0 +1,1409 @@
+head	1.23;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.23
+date	2014.01.19.20.42.51;	author netinstall;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	2014.01.17.16.11.47;	author netinstall;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	2013.10.23.20.39.47;	author netinstall;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	2013.01.22.15.32.08;	author netinstall;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	2013.01.18.22.14.17;	author netinstall;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	2013.01.18.21.46.44;	author netinstall;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	2013.01.18.15.40.30;	author netinstall;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	2013.01.17.19.08.33;	author netinstall;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	2013.01.10.18.16.57;	author netinstall;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	2012.12.18.15.50.46;	author netinstall;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	2012.12.14.15.23.06;	author netinstall;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	2012.12.14.15.12.33;	author netinstall;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	2012.12.13.18.38.06;	author netinstall;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	2012.12.05.18.57.30;	author netinstall;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	2012.12.04.17.19.04;	author netinstall;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2012.12.04.15.58.32;	author netinstall;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2012.12.04.15.47.38;	author netinstall;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2012.12.03.20.14.56;	author netinstall;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2012.12.03.19.47.04;	author root;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2012.10.25.18.08.23;	author root;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2012.10.25.17.41.53;	author root;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2012.09.20.20.02.08;	author root;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2012.09.20.20.00.00;	author root;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.23
+log
+@specify BASE_URL
+@
+text
+@#!/bin/bash
+#
+# mkksconfig: write kickstart config based on environment variables;
+# intended to be called from %pre section of a generic kickstart file
+#
+# 	$Id: mkksconfig,v 1.22 2014/01/17 16:11:47 netinstall Exp netinstall $
+#
+########################################################################
+#
+# Environment variables that determine this script's effects:
+#
+# bl - location of boot loader (mbr, partition)
+# part - partitioning scheme (generic, raid0, raid1, default...)
+# sp - spare drives for RAID
+# lvm - whether to use LVM (yes, no); "YES" IS IGNORED FOR RAID (FIXME)
+# user - user accounts (itc, generic, default...)
+# pkg - package selection (itc, generic, default...)
+# swap - swap size (in MB or multiple of RAM size)
+# pw - root password (cleartext)
+# post - post-installation script (itc, generic...)
+# fb - whether to start system reconfiguration tool on first boot (yes, no)
+# email - e-mail address to receive notification of completion
+#
+########################################################################
+
+BASE_URL="http://10.1.0.1"
+
+function abort() {
+    cat <<EOF
+------------------------------------------------------------------------
+INSTALLATION ABORTED
+${1:-no message specified}
+------------------------------------------------------------------------
+EOF
+    sleep 666d
+}
+
+########################################################################
+#
+# Try to label drives over 2 TB with EFI disk label, others with MS-DOS.
+#
+
+function label_disks() {
+    # array of disk names
+    DISKS=( $(list-harddrives | cut -f1 -d' ') )
+    # array of disk sizes in MB (omit decimal portion)
+    SIZES=( $(list-harddrives | sed -e 's/.* \(.*\)\..*/\1/') )
+    # comma-separated list of disks for other functions
+    DISKLIST=$(echo ${DISKS[@@]} | sed -e 's/ /,/g')
+    # count of disks for loop
+    DISKCOUNT=${#DISKS[@@]}
+
+    (( DISKCOUNT )) || abort "No hard drives found"
+    for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
+        DISK=${DISKS[$INDEX]}
+        SIZE=${SIZES[$INDEX]}
+
+        if [ "$SIZE" -gt 2000000 ]; then
+            LABEL="gpt"
+        else
+            LABEL="msdos"
+        fi
+
+        echo -e "Disk: $DISK, Label: $LABEL, Result: \c"
+        if parted -s /dev/$DISK mklabel "$LABEL"; then
+            echo "success"
+        else
+            echo "failure"
+            abort "Failed to label $DISK"
+        fi
+    done
+}
+
+########################################################################
+
+function print_usage() {
+    cat <<EOF
+Usage: $0 FILENAME
+
+Write partial kickstart configuration to FILENAME.
+
+Consult comments in script for details.
+EOF
+}
+
+function get_config_name() {
+    # $1: name of kickstart config file to be written
+
+    if [ -n "$1" ]; then
+        CONFIG="$1"
+        echo "File name: $CONFIG"
+    else
+        print_usage
+        exit 1
+    fi
+}
+
+########################################################################
+
+function write_common() {
+    cat <<EOF > "$CONFIG"
+authconfig --enableshadow --enablemd5
+selinux --disabled
+firewall --enabled
+skipx
+zerombr
+EOF
+}
+
+########################################################################
+
+function write_rootpw() {
+    echo "Root password: $1"
+    echo "rootpw $1" >> "$CONFIG"
+}
+
+########################################################################
+
+function write_firstboot() {
+    [ -z "$1" ] && return
+    if [ "$1" == "1" -o "$1" == "on" -o "$1" == "yes" ]; then
+        echo firstboot >> "$CONFIG"
+    fi
+}
+
+########################################################################
+
+function write_bootloader() {
+    # $1: location of bootloader
+
+    if [ "$LABEL" == "gpt" ]; then
+        BOOTLOC="partition"
+    elif [ "$1" == "mbr" -o "$1" == "partition" ]; then
+        BOOTLOC="$1"
+    else
+        abort "Invalid value for bl: $1"
+    fi
+    echo "Boot loader location: $BOOTLOC"
+    echo "bootloader --location=$BOOTLOC --driveorder=$DISKLIST" >> "$CONFIG"
+}
+
+########################################################################
+
+function write_clearpart() {
+    echo "clearpart --all --initlabel --drives=$DISKLIST" >> "$CONFIG"
+}
+
+########################################################################
+#
+# Partition/LVM/filesystem configuration.
+#
+
+function calculate_swap() {
+    [ -z "$1" ] && return
+    if GREPPED=$(echo "$1" | egrep '^[0-9]*$'); then
+        # value of swap is an integer: size in MB
+        SWAPSIZE="$GREPPED"
+    elif GREPPED=$(echo "$1" | egrep '^[0-9]*x$'); then
+        # value of swap is an integer followed by "x": multiplication factor
+        SWAPFACTOR="${GREPPED%%x}"
+        # size of memory in MB
+        MEMSIZE=$(( $(sed -e '/^MemTotal/!d;s/^.* \([0-9]*\) .*/\1/' /proc/meminfo) / 1000 ))
+        SWAPSIZE=$(( MEMSIZE * SWAPFACTOR ))
+    else
+        abort "Invalid value for swap: $1"
+    fi
+}
+
+function write_raid() {
+    # $1: RAID level for LVM's physical volume
+    # $2 (optional): number of spare drives to be allocated
+
+    for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
+        DISK=${DISKS[$INDEX]}
+        RAIDBOOT[$INDEX]="raid.${INDEX}1"
+        RAIDPV[$INDEX]="raid.${INDEX}2"
+        RAIDROOT[$INDEX]="raid.${INDEX}3"
+        cat <<EOF >> "$CONFIG"
+part ${RAIDBOOT[$INDEX]} --size 200 --asprimary --ondisk=$DISK
+part ${RAIDPV[$INDEX]} --size 1 --grow --asprimary --ondisk=$DISK
+EOF
+    done
+    cat <<EOF >> "$CONFIG"
+raid /boot --device md0 --level=1 ${RAIDBOOT[*]}
+raid pv.01 --device md1 --level=$1 --spares=${2:-0} ${RAIDPV[*]}
+volgroup VolGroup00 pv.01
+logvol / --vgname=VolGroup00 --size=1 --grow --name=LogVol00
+logvol swap --vgname=VolGroup00 $SWAPSTR --name=LogVol01
+EOF
+}
+
+function write_part() {
+    # $1: type of partition scheme
+    # $2: whether to use LVM
+    # $3 (optional): number of spare drives for RAID
+
+    calculate_swap "$swap"
+    if [ -n "$SWAPSIZE" ]; then
+        echo "Swap size: $SWAPSIZE MB"
+        SWAPSTR="--size $SWAPSIZE"
+    else
+        SWAPSTR="--recommended"
+    fi
+
+    case "$1" in
+        generic | std)
+            if [ "$2" == "1" -o "$2" == "on" -o "$2" == "yes" ]; then
+                cat <<EOF >> "$CONFIG"
+part /boot --size 200 --asprimary --ondisk=${DISKS[0]}
+part pv.01 --size 1 --grow --asprimary --ondisk=${DISKS[0]}
+volgroup VolGroup00 pv.01
+logvol / --vgname=VolGroup00 --size=1 --grow --name=LogVol00
+logvol swap --vgname=VolGroup00 $SWAPSTR --name=LogVol01
+EOF
+            else
+                cat <<EOF >> "$CONFIG"
+part /boot --size 200 --asprimary --ondisk=${DISKS[0]}
+part / --size 1 --grow --asprimary --ondisk=${DISKS[0]}
+part swap $SWAPSTR --asprimary --ondisk=${DISKS[0]}
+EOF
+            fi
+            ;;
+        raid0)
+            write_raid 0 0
+            ;;
+        raid1)
+            write_raid 1 "$3"
+            ;;
+        raid5)
+            write_raid 5 "$3"
+            ;;
+        raid6)
+            write_raid 6 "$3"
+            ;;
+        "")
+            echo "autopart" >> "$CONFIG"
+            ;;
+        *)
+            abort "Invalid value for part: $1"
+    esac
+}
+
+########################################################################
+
+function write_user() {
+    # $1: category of user accounts to be defined
+
+    [ -z "$1" ] && return
+    USERFILE="user.$1"
+    URL="${BASE_URL}/linux-install/centos/$USERFILE"
+    wget -q -O - "$URL" >> "$CONFIG"
+    if [ $? -ne 0 ]; then
+        abort "Invalid value \"$1\" for user ($USERFILE not found at $URL)"
+    fi
+}
+
+########################################################################
+
+function write_packages() {
+    # $1: choice of package definition
+
+    [ -z "$1" ] && return
+    echo "%packages" >> "$CONFIG"
+    PKGFILE="pkg.$1"
+    URL="${BASE_URL}/linux-install/centos/$PKGFILE"
+    wget -q -O - "$URL" >> "$CONFIG"
+    if [ $? -ne 0 ]; then
+        abort "Invalid value \"$1\" for pkg ($PKGFILE not found at $URL)"
+    fi
+}
+
+########################################################################
+
+function write_post() {
+    # $1: (optional) suffix of post-installation script
+    # $2: (optional) e-mail address for notification of completion
+
+    # post-installation scripts are named "postinstall-*"
+    PREFIX=postinstall
+    if [ -n "$1" ]; then
+        POSTFILE="$PREFIX-$1"
+        echo "Post-installation script: $POSTFILE"
+    else
+        echo "No post-installation script specified; none will be used."
+    fi
+
+    cat <<EOF >> "$CONFIG"
+%post
+#
+# echo output to virtual console 6 and to log file
+#
+exec < /dev/tty6 > /dev/tty6
+(
+chvt 6
+EOF
+
+    if [ -n "$POSTFILE" ]; then
+        URL="${BASE_URL}/linux-install/postinstall/$POSTFILE"
+        wget -q -O /dev/null "$URL" || \
+            abort "Invalid value \"$1\" for post ($POSTFILE not found at $URL)"
+        # post-installation script
+        cat <<EOF >> "$CONFIG"
+wget -nv -O - $URL | bash
+EOF
+    fi
+
+    if [ -n "$2" ]; then
+        # e-mail notification
+        URL="${BASE_URL}/linux-install/postinstall/send-email.py"
+        cat <<EOF >> "$CONFIG"
+wget -nv -O - $URL | python - $2
+EOF
+    fi
+
+    cat <<EOF >> "$CONFIG"
+# kickstart's "reboot" option is unreliable
+# ...unfortunately, this can do bad things to md devices...
+# sync; sync; echo b > /proc/sysrq-trigger
+chvt 1
+) 2>&1 | tee /root/${POSTFILE}.log
+EOF
+}
+
+########################################################################
+#
+# main
+#
+
+# show environment for debugging
+env | grep ^[a-z]
+
+label_disks
+
+get_config_name $1
+write_common
+write_rootpw "${pw:-root!!!}"
+write_firstboot "$fb"
+write_bootloader "${bl:-mbr}"
+write_clearpart
+write_part "$part" "${lvm:-no}" "$sp"
+write_user "$user"
+write_packages "$pkg"
+write_post "$post" "$email"
+@
+
+
+1.22
+log
+@make LVM optional
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.21 2013/10/23 20:39:47 netinstall Exp netinstall $
+d26 2
+d250 1
+a250 1
+    URL="http://10.1.0.1/linux-install/centos/$USERFILE"
+d265 1
+a265 1
+    URL="http://10.1.0.1/linux-install/centos/$PKGFILE"
+d298 1
+a298 1
+        URL="http://10.1.0.1/linux-install/postinstall/$POSTFILE"
+d309 1
+a309 1
+        URL="http://10.1.0.1/linux-install/postinstall/send-email.py"
+@
+
+
+1.21
+log
+@replace all instances of install.mycolo.biz with 10.1.0.1 for new installation net
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.20 2013/01/22 15:32:08 netinstall Exp netinstall $
+d15 1
+d119 1
+a119 1
+    if [ "$1" -eq 1 -o "$1" == "on" -o "$1" == "yes" ]; then
+d148 1
+a148 3
+# Partition/LVM/filesystem configuration; this could be more
+# flexible--e.g. make LVM optional. All of these use LVM as that is
+# RHEL default.
+d192 2
+a193 1
+    # $2 (optional): number of spare drives for RAID
+d205 2
+a206 1
+            cat <<EOF >> "$CONFIG"
+d213 7
+d225 1
+a225 1
+            write_raid 1 "$2"
+d228 1
+a228 1
+            write_raid 5 "$2"
+d231 1
+a231 1
+            write_raid 6 "$2"
+d338 1
+a338 1
+write_part "$part" "$sp"
+@
+
+
+1.20
+log
+@remove gratuitous use of cat(1)
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.19 2013/01/18 22:14:17 netinstall Exp netinstall $
+d240 1
+a240 1
+    URL="http://install.mycolo.biz/linux-install/centos/$USERFILE"
+d255 1
+a255 1
+    URL="http://install.mycolo.biz/linux-install/centos/$PKGFILE"
+d288 1
+a288 1
+        URL="http://install.mycolo.biz/linux-install/postinstall/$POSTFILE"
+d299 1
+a299 1
+        URL="http://install.mycolo.biz/linux-install/postinstall/send-email.py"
+@
+
+
+1.19
+log
+@add check for existence of POSTFILE at URL
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.18 2013/01/18 21:46:44 netinstall Exp $
+d241 2
+a242 2
+    wget -q -O - "$URL" | cat >> "$CONFIG"
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+d256 2
+a257 2
+    wget -q -O - "$URL" | cat >> "$CONFIG"
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+@
+
+
+1.18
+log
+@add abort()
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.17 2013/01/18 15:40:30 netinstall Exp netinstall $
+d243 1
+a243 1
+        abort "Invalid value for user: $1 ($USERFILE not found)"
+d258 1
+a258 1
+        abort "Invalid value for pkg: $1 ($PKGFILE not found)"
+d271 2
+a272 2
+        POSTSCRIPT="$PREFIX-$1"
+        echo "Post-installation script: $POSTSCRIPT"
+d287 4
+a290 1
+    if [ -n "$POSTSCRIPT" ]; then
+a291 1
+        URL="http://install.mycolo.biz/linux-install/postinstall/$POSTSCRIPT"
+d310 1
+a310 1
+) 2>&1 | tee /root/${POSTSCRIPT}.log
+@
+
+
+1.17
+log
+@move user and package data from script to user.* and user.pkg files
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.16 2013/01/17 19:08:33 netinstall Exp netinstall $
+d24 12
+d50 1
+d66 1
+d117 3
+a119 4
+    if [ -n "$1" ]; then
+        if echo "$1" | egrep -iq '(1|on|yes)'; then
+            echo firstboot >> "$CONFIG"
+        fi
+d133 1
+a133 1
+        echo "Invalid value for bl: $1"
+d146 5
+d155 1
+a155 1
+        # swap is an integer: size in MB
+d158 1
+a158 1
+        # swap is an integer followed by "x": multiplication factor
+d164 1
+a164 1
+        echo "Invalid value for swap: $1"
+d170 1
+a170 1
+    # $2: number of spare drives to be allocated
+d184 1
+a184 1
+raid pv.01 --device md1 --level=$1 --spares=$2 ${RAIDPV[*]}
+d193 1
+a193 1
+    # $2: number of spare drives for RAID
+d225 1
+a225 1
+        default)
+d229 1
+a229 1
+            echo "Invalid value for part: $1"
+d238 1
+d243 1
+a243 1
+        echo "Invalid value for user: $1 ($USERFILE not found)"
+d252 1
+d258 1
+a258 1
+        echo "Invalid value for pkg: $1 ($PKGFILE not found)"
+d284 1
+d288 2
+d291 1
+a291 2
+chvt 6
+wget -nv -O - http://install.mycolo.biz/linux-install/postinstall/$POSTSCRIPT | bash
+d297 1
+d299 1
+a299 2
+# send e-mail notification of completion
+wget -nv -O - http://install.mycolo.biz/linux-install/postinstall/send-email.py | python - $2
+d325 1
+a325 1
+write_firstboot "${fb:-0}"
+d328 3
+a330 3
+write_part "${part:-default}" "${sp:-0}"
+write_user "${user:-default}"
+write_packages "${pkg:-default}"
+@
+
+
+1.16
+log
+@add watchdog to write_packages()
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.15 2013/01/10 18:16:57 netinstall Exp netinstall $
+a218 2
+    #
+    # "$" must be escaped in passwords
+d220 6
+a225 18
+    case "$1" in
+        itc)
+            cat <<EOF >> "$CONFIG"
+user --name=blb --groups=wheel --password=\$1\$he4Ctvkx\$6bgE1exLXAaV.O1DJhGgJ1 --iscrypted --shell=/bin/csh
+user --name=msmith --groups=wheel --password=\$1\$VwV3Z8QT\$81l3U8hdTyAsvqto52Y/8. --iscrypted --shell=/bin/bash
+EOF
+            ;;
+
+        generic | std)
+            cat <<EOF >> "$CONFIG"
+user --name=tech --password=\$1\$oeqC7gv0\$p8hex0J3yvTRdxcoPVkTI/ --iscrypted --shell=/bin/bash
+EOF
+            ;;
+        default)
+            ;;
+        *)
+            echo "Invalid value for user: $1"
+    esac
+d234 6
+a239 61
+    case "$1" in
+        cpanel)
+            cat <<EOF >> "$CONFIG"
+-sendmail
+-postfix
+-exim
+-abrt
+-audit
+-gpm
+-bluez-utils
+-pcsc-lite
+-autofs
+-yum-updatesd
+net-snmp
+net-snmp-devel
+EOF
+        ;;
+    itc)
+        cat <<EOF >> "$CONFIG"
+ntp
+postfix
+yum-priorities
+net-snmp
+net-snmp-devel
+rsyslog-gnutls
+xinetd
+sysstat
+xorg-x11-xauth
+rcs
+nc
+python-setuptools
+EOF
+        ;;
+    browser)
+        cat <<EOF >> "$CONFIG"
+@@ internet-browser
+xorg-x11-xauth
+firstboot
+ntp
+EOF
+        ;;
+    watchdog)
+        cat <<EOF >> "$CONFIG"
+firstboot
+ntp
+OpenIPMI
+OpenIPMI-tools
+watchdog
+EOF
+            ;;
+    generic | std)
+        cat <<EOF >> "$CONFIG"
+firstboot
+ntp
+EOF
+            ;;
+        default)
+            ;;
+        *)
+            echo "Invalid value for pkg: $1"
+    esac
+d251 1
+a251 1
+        POSTSCRIPT="postinstall-${1}"
+d269 1
+a269 1
+wget -O - http://install.mycolo.biz/linux-install/postinstall/$POSTSCRIPT | bash
+d277 1
+a277 1
+wget -O - http://install.mycolo.biz/linux-install/postinstall/send-email.py | python - $2
+@
+
+
+1.15
+log
+@remove arg to zerombr
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.14 2012/12/18 15:50:46 netinstall Exp netinstall $
+d289 9
+@
+
+
+1.14
+log
+@change desktop to browser
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.13 2012/12/14 15:23:06 netinstall Exp netinstall $
+d89 1
+a89 1
+zerombr yes
+@
+
+
+1.13
+log
+@change browser to desktop in write_packages()
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.12 2012/12/14 15:12:33 netinstall Exp netinstall $
+d281 1
+a281 1
+    desktop)
+@
+
+
+1.12
+log
+@add ondisk to std part
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.11 2012/12/13 18:38:06 netinstall Exp netinstall $
+d281 1
+a281 1
+    browser)
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.10 2012/12/05 18:57:30 netinstall Exp netinstall $
+d188 2
+a189 2
+part /boot --size 200 --asprimary
+part pv.01 --size 1 --grow --asprimary
+@
+
+
+1.10
+log
+@remove brute-force reboot method
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.9 2012/12/04 17:19:04 netinstall Exp netinstall $
+d345 2
+a346 1
+) 2>&1 | tee /root/ks-post.log
+@
+
+
+1.9
+log
+@add defaults to variables passed in main
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.8 2012/12/04 15:58:32 netinstall Exp netinstall $
+d12 2
+a13 2
+# bl - location of boot loader
+# part - partitioning scheme
+d15 2
+a16 2
+# user - user accounts
+# pkg - package selection
+d19 2
+a20 2
+# post - name of post-installation script ("postinstall-" will be prepended)
+# fb - whether to start system reconfiguration tool on first boot
+d31 1
+a31 1
+    # array of disk sizes in MB
+d70 1
+a70 1
+    # $1: (optional) name of kickstart config file to be written
+a95 1
+    # default root password is root!!!
+d186 1
+a186 1
+        generic)
+d230 1
+a230 1
+        generic)
+d251 12
+a262 13
+    -sendmail
+    -postfix
+    -exim
+    -abrt
+    -audit
+    -gpm
+    -bluez-utils
+    -pcsc-lite
+    -autofs
+    -yum-updatesd
+    # for nagios/cacti monitoring
+    net-snmp
+    net-snmp-devel
+d264 23
+a286 15
+            ;;
+        itc)
+            cat <<EOF >> "$CONFIG"
+    ntp
+    postfix
+    yum-priorities
+    net-snmp
+    net-snmp-devel
+    rsyslog-gnutls
+    xinetd
+    sysstat
+    xorg-x11-xauth
+    rcs
+    nc
+    python-setuptools
+d288 5
+a292 5
+            ;;
+        generic)
+            cat <<EOF >> "$CONFIG"
+    firstboot
+    ntp
+d337 1
+a337 3
+cd /tmp
+wget http://install.mycolo.biz/linux-install/postinstall/send-email.py && python send-email.py $2
+rm -f /tmp/send-email.py
+d343 2
+a344 3
+sync
+sync
+echo b > /proc/sysrq-trigger
+@
+
+
+1.8
+log
+@change write_bootloader() to use bl unless gpt label is found
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.7 2012/12/04 15:47:38 netinstall Exp netinstall $
+d97 2
+a98 3
+    PASSWORD="${1:-root!!!}"
+    echo "Root password: $PASSWORD"
+    echo "rootpw $PASSWORD" >> "$CONFIG"
+d114 1
+a114 1
+    # $1: (optional) location of bootloader
+d116 1
+a116 1
+    if [ "$LABEL" == gpt ]; then
+d118 1
+a118 1
+    elif [ -n "$1" ]; then
+d121 1
+a121 1
+        BOOTLOC="mbr"
+d166 2
+a167 2
+raid /boot --fstype ext2 --device md0 --level=1 ${RAIDBOOT[*]}
+raid pv.01 --fstype ext3 --device md1 --level=$1 --spares=$2 ${RAIDPV[*]}
+d175 2
+a176 2
+    # $1: (optional) type of partition scheme
+    # $2: (optional) number of spare drives for RAID
+d200 1
+a200 1
+            write_raid 1 ${2:-0}
+d203 1
+a203 1
+            write_raid 5 ${2:-0}
+d206 1
+a206 1
+            write_raid 6 ${2:-0}
+d208 1
+a208 1
+        *)
+d211 2
+d219 1
+a219 1
+    # $1: (optional) category of user accounts to be defined
+d236 2
+d239 1
+a239 2
+            :
+            ;;
+d246 1
+a246 1
+    # $1: (optional) choice of package definition
+d283 1
+a283 1
+        generic | *)
+d289 4
+d358 3
+a360 3
+write_rootpw "$pw"
+write_firstboot "$fb"
+write_bootloader "$bl"
+d362 3
+a364 3
+write_part "$part" "$sp"
+write_user "$user"
+write_packages "$pkg"
+@
+
+
+1.7
+log
+@add raid5/6 (broken)
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.6 2012/12/03 20:14:56 netinstall Exp netinstall $
+a75 2
+        # CONFIG="/tmp/custom.ks"
+        # echo "No file name specified; using $CONFIG."
+d117 1
+a117 1
+    if [ "$DISKCOUNT" -gt 1 -o "$LABEL" == gpt ]; then
+a118 1
+        echo "Boot loader location: $BOOTLOC"
+a120 1
+        echo "Boot loader location: $BOOTLOC"
+a122 1
+        echo "No boot loader location specified; using $BOOTLOC."
+d124 1
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.5 2012/12/03 19:47:04 root Exp netinstall $
+d12 1
+a12 1
+# bl - location of boot loader. 
+d14 1
+d34 1
+a34 1
+    DISKLIST=$(echo ${DISKS[@@]} | sed -e 's/ /,/')
+d59 10
+d76 4
+a79 2
+        CONFIG="/tmp/custom.ks"
+        echo "No file name specified; using $CONFIG."
+d141 2
+a142 2
+    SEDOUT=$(echo "$1" | egrep '^[0-9]*$')
+    if [ -n "$SEDOUT" ]; then
+d144 7
+a150 1
+        SWAPSIZE="$SEDOUT"
+d152 1
+a152 8
+        SEDOUT=$(echo "$1" | egrep '^[0-9]*x$')
+        if [ -n "$SEDOUT" ]; then
+            # swap is an integer followed by "x": multiplication factor
+            SWAPFACTOR="${SEDOUT%%x}"
+            # size of memory in MB
+            MEMSIZE=$(( $(sed -e '/^MemTotal/!d;s/^.* \([0-9]*\) .*/\1/' /proc/meminfo) / 1000 ))
+            SWAPSIZE=$(( MEMSIZE * SWAPFACTOR ))
+        fi
+d154 1
+d156 21
+d181 1
+d186 3
+a192 5
+            if  [ -n "$SWAPSIZE" ]; then
+                SWAPSTR="--size $SWAPSIZE"
+            else
+                SWAPSTR="--recommended"
+            fi
+d202 10
+a211 22
+            if [ -n "$SWAPSIZE" ]; then
+                SWAPSIZE=$(( SWAPSIZE / DISKCOUNT ))
+                SWAPSTR="--size $SWAPSIZE"
+            else
+                SWAPSTR="--recommended"
+            fi
+            for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
+                DISK=${DISKS[$INDEX]}
+                RAIDBOOT[$INDEX]="raid.${INDEX}1"
+                RAIDSWAP[$INDEX]="raid.${INDEX}2"
+                RAIDROOT[$INDEX]="raid.${INDEX}3"
+                cat <<EOF >> "$CONFIG"
+part ${RAIDBOOT[$INDEX]} --size 100 --asprimary --ondisk=$DISK
+part ${RAIDSWAP[$INDEX]} $SWAPSTR --asprimary --ondisk=$DISK
+part ${RAIDROOT[$INDEX]} --size 1 --grow --asprimary --ondisk=$DISK
+EOF
+            done
+            cat <<EOF >> "$CONFIG"
+raid /boot --fstype ext2 --device md0 --level=1 ${RAIDBOOT[*]}
+raid swap --fstype swap --device md1 --level=0 ${RAIDSWAP[*]}
+raid / --fstype ext3 --device md2 --level=0 ${RAIDROOT[*]}
+EOF
+d312 1
+a312 1
+# Echo output to virtual console 6 and to log file.
+d360 1
+a360 1
+write_part "$part"
+@
+
+
+1.5
+log
+@add raid0 support
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.4 2012/10/25 18:08:23 root Exp $
+d169 1
+a169 1
+            if  [ -n "$SWAPSIZE" ]; then
+@
+
+
+1.4
+log
+@re-organize function declations
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.3 2012/10/25 17:41:53 root Exp root $
+d9 48
+a71 30
+function get_disk_device() {
+    #
+    # Choose the first device in the list for installation.
+    # It is usually desirable to configure hardware RAID before kickstart.
+    #
+    DISK=`fdisk -l | sed -e '/^Disk/!d;s~^Disk /dev/\(.*\):.*$~\1~;q'`
+    if [ -z "$DISK" ]; then
+        # Look for an HP CCISS RAID controller.
+        DISK=`fdisk -l /dev/cciss/c0d0 | sed -e '/^Disk/!d;s~^Disk /dev/\(.*\):.*$~\1~;q'`
+    fi
+    if [ -n "$DISK" ]; then
+        SIZE=`fdisk -l /dev/$DISK|sed -e '/^Disk/!d;s/^Disk.* \([0-9]*\) bytes$/\1/'`
+        echo "Disk device name: $DISK"
+        echo "Disk device size: $SIZE"
+    else
+        echo "No disk device found!"
+        exit 1
+    fi
+    # use EFI disk label for devices larger than 2 TB (CentOS release > 5)
+    # THIS IS NOT FULLY TESTED
+    if [ "$SIZE" -gt 2000000000000 ]; then
+        LABEL="gpt"
+    else
+        LABEL="msdos"
+    fi
+    echo "Disk label type: $LABEL"
+}
+
+########################################################################
+
+a74 1
+rootpw --iscrypted $1$HNQ8thwZ$3aEDnOrd0KO7uBs.mGlrx0
+d84 19
+d104 1
+a104 1
+    # $1: location of bootloader
+d106 4
+a109 1
+    if [ -n "$1" ]; then
+d116 1
+a116 2
+    # echo "bootloader --location=$BOOTLOC --driveorder=$DISK" >> "$CONFIG"
+    echo "bootloader --location=$BOOTLOC" >> "$CONFIG"
+d122 1
+a122 4
+    if [ "$LABEL" == msdos ]; then
+        # echo "clearpart --all --initlabel --drives=$DISK" >> "$CONFIG"
+        echo "clearpart --all --initlabel" >> "$CONFIG"
+    fi
+d127 18
+d148 5
+d154 6
+a159 2
+        # put all other blocks above std (default)
+        std | *)
+d165 25
+a189 1
+logvol swap --vgname=VolGroup00 --recommended --name=LogVol01
+d192 3
+d201 3
+a203 1
+    # $1: category of user accounts to be defined
+d208 2
+a209 2
+user --name=blb --groups=wheel --password=$1$he4Ctvkx$6bgE1exLXAaV.O1DJhGgJ1 --iscrypted --shell=/bin/csh
+user --name=msmith --groups=wheel --password=$1$VwV3Z8QT$81l3U8hdTyAsvqto52Y/8. --iscrypted --shell=/bin/bash
+d215 1
+a215 1
+user --name=tech --groups=wheel --password=$1$oeqC7gv0$p8hex0J3yvTRdxcoPVkTI/ --iscrypted --shell=/bin/bash
+d218 3
+d248 16
+d265 4
+a268 1
+            # FIXME
+d276 1
+a276 1
+    # $1: name of post-installation script
+d279 2
+d282 1
+a282 1
+        POSTSCRIPT="$1"
+d285 1
+a285 2
+        POSTSCRIPT="postinstall-generic"
+        echo "No post-installation script specified; using $POSTSCRIPT."
+a289 1
+
+d295 4
+d300 1
+a300 4
+cd /tmp
+wget http://199.115.30.22/linux-install/postinstall/$POSTSCRIPT
+bash /tmp/$POSTSCRIPT
+rm -f /tmp/$POSTSCRIPT
+d302 1
+d305 1
+a305 1
+        # e-mail notification to kickstart@@mycolo.biz
+d307 3
+a309 1
+wget http://199.115.30.22/linux-install/postinstall/send-email.py && python send-email.py $2
+a313 1
+    # kickstart's "reboot" option is unreliable
+d315 1
+d319 1
+a319 1
+) 2>&1 | tee /root/$POSTSCRIPT.log
+a323 33
+
+function label_disk_device() {
+    parted -s /dev/$DISK mklabel "$LABEL"
+}
+
+########################################################################
+
+function label_disks() {
+    #
+    # Try to label drives over 2 TB with EFI disk label, others with MS-DOS.
+    #
+    DISKS=( $(list-harddrives) )
+    LEN=${#DISKS[@@]}
+    for (( INDEX=0; INDEX < LEN; INDEX++ )); do
+        DISK=${DISKS[$INDEX]}
+        (( INDEX++ ))
+        SIZE=$(echo ${DISKS[$INDEX]} | cut -f1 -d.)
+
+        if [ "$SIZE" -gt 2000000 ]; then
+            LABEL="gpt"
+        else
+            LABEL="msdos"
+        fi
+
+        echo -e "Disk: $DISK, Label: $LABEL, Result: \c"
+        if parted -s /dev/$DISK mklabel "$LABEL"; then
+            echo "success"
+        else
+            echo "failure"
+        fi
+    done
+}
+########################################################################
+d328 4
+a331 1
+env > /tmp/env.out
+a333 1
+# get_disk_device
+d335 8
+a342 17
+
+case "$type" in
+    cpanel)
+        write_bootloader mbr
+        write_clearpart
+        write_part std
+        write_user itc
+        write_packages cpanel
+        write_post postinstall-cpanel
+        ;;
+    generic | *)
+        write_part std
+        ;;
+esac
+
+# label_disk_device
+label_disks
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+# 	$Id: mkksconfig,v 1.2 2012/09/20 20:02:08 root Exp root $
+d54 13
+a91 13
+function write_common() {
+    cat <<EOF > "$CONFIG"
+authconfig --enableshadow --enablemd5
+rootpw --iscrypted $1$HNQ8thwZ$3aEDnOrd0KO7uBs.mGlrx0
+selinux --disabled
+firewall --enabled
+skipx
+zerombr yes
+EOF
+}
+
+########################################################################
+
+@
+
+
+1.2
+log
+@initial check-in
+@
+text
+@d6 1
+a6 1
+# 	$Id$
+a9 23
+function write_bootloader() {
+    # $1: location of bootloader
+
+    if [ -n "$1" ]; then
+        BOOTLOC="$1"
+        echo "Boot loader location: $BOOTLOC"
+    else
+        BOOTLOC="mbr"
+        echo "No boot loader location specified; using $BOOTLOC."
+    fi
+    # echo "bootloader --location=$BOOTLOC --driveorder=$DISK" >> "$CONFIG"
+    echo "bootloader --location=$BOOTLOC" >> "$CONFIG"
+}
+
+########################################################################
+
+function write_clearpart() {
+    if [ "$LABEL" == msdos ]; then
+        echo "clearpart --all --initlabel --drives=$DISK" >> "$CONFIG"
+    fi
+}
+########################################################################
+
+d54 25
+d213 27
+d244 2
+d247 1
+a247 1
+get_disk_device
+d264 2
+a265 1
+label_disk_device
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 2
+@
