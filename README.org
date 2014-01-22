@@ -6,6 +6,7 @@
   - =mkksconfig= :: script that completes the kickstart configuration by creating =/tmp/custom.ks= based on default values and kernel arguments
   - =pkg.generic= :: list of default packages to be installed during installation
   - =user.generic= :: definitions of default users to be added during installation
+  - =send-email.py= :: Python script for sendmail e-mail notification after installation
 
 References to /installation directory/ refer to the location of =mkksconfig=.
 
