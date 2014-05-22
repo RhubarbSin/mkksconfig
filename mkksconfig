@@ -3,7 +3,7 @@
 # mkksconfig: write kickstart config based on environment variables;
 # intended to be called from %pre section of a generic kickstart file
 #
-# 	$Id: mkksconfig,v 1.23 2014/01/19 20:42:51 netinstall Exp $
+# 	$Id: mkksconfig,v 1.24 2014/05/22 18:43:33 netinstall Exp $
 #
 ########################################################################
 #
@@ -12,7 +12,7 @@
 # bl - location of boot loader (mbr, partition)
 # part - partitioning scheme (generic, raid0, raid1, default...)
 # sp - spare drives for RAID
-# lvm - whether to use LVM (yes, no); "YES" IS IGNORED FOR RAID (FIXME)
+# lvm - whether to use LVM (yes, no)
 # user - user accounts (itc, generic, default...)
 # pkg - package selection (itc, generic, default...)
 # swap - swap size (in MB or multiple of RAM size)
@@ -168,25 +168,40 @@ function calculate_swap() {
 
 function write_raid() {
     # $1: RAID level for LVM's physical volume
-    # $2 (optional): number of spare drives to be allocated
+    # $2: whether to use LVM
+    # $3 (optional): number of spare drives to be allocated
 
     for (( INDEX=0; INDEX < DISKCOUNT; INDEX++ )); do
         DISK=${DISKS[$INDEX]}
         RAIDBOOT[$INDEX]="raid.${INDEX}1"
-        RAIDPV[$INDEX]="raid.${INDEX}2"
-        RAIDROOT[$INDEX]="raid.${INDEX}3"
+        RAIDROOT[$INDEX]="raid.${INDEX}2"
+        RAIDSWAP[$INDEX]="raid.${INDEX}3"
         cat <<EOF >> "$CONFIG"
 part ${RAIDBOOT[$INDEX]} --size 200 --asprimary --ondisk=$DISK
-part ${RAIDPV[$INDEX]} --size 1 --grow --asprimary --ondisk=$DISK
+part ${RAIDROOT[$INDEX]} --size 1 --grow --asprimary --ondisk=$DISK
 EOF
+        if ! [ "$2" == "1" -o "$2" == "on" -o "$2" == "yes" ]; then
+            cat <<EOF >> "$CONFIG"
+part ${RAIDSWAP[$INDEX]} $SWAPSTR --asprimary --ondisk=$DISK
+EOF
+        fi
     done
     cat <<EOF >> "$CONFIG"
-raid /boot --device md0 --level=1 ${RAIDBOOT[*]}
-raid pv.01 --device md1 --level=$1 --spares=${2:-0} ${RAIDPV[*]}
+raid /boot --device md0 --level=1 --spares=${3:-0} ${RAIDBOOT[*]}
+EOF
+    if [ "$2" == "1" -o "$2" == "on" -o "$2" == "yes" ]; then
+        cat <<EOF >> "$CONFIG"
+raid pv.01 --device md1 --level=$1 --spares=${3:-0} ${RAIDROOT[*]}
 volgroup VolGroup00 pv.01
 logvol / --vgname=VolGroup00 --size=1 --grow --name=LogVol00
 logvol swap --vgname=VolGroup00 $SWAPSTR --name=LogVol01
 EOF
+    else
+        cat <<EOF >> "$CONFIG"
+raid / --device md1 --level=$1 --spares=${3:-0} ${RAIDROOT[*]}
+raid swap --device md2 --level=1 --spares=${3:-0} ${RAIDSWAP[*]}
+EOF
+fi
 }
 
 function write_part() {
@@ -224,13 +239,13 @@ EOF
             write_raid 0 0
             ;;
         raid1)
-            write_raid 1 "$3"
+            write_raid 1 "$2" "$3"
             ;;
         raid5)
-            write_raid 5 "$3"
+            write_raid 5 "$2" "$3"
             ;;
         raid6)
-            write_raid 6 "$3"
+            write_raid 6 "$2" "$3"
             ;;
         "")
             echo "autopart" >> "$CONFIG"

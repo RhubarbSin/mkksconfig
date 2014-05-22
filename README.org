@@ -29,7 +29,7 @@ References to /installation directory/ refer to the location of =mkksconfig=.
    *part*, *volgroup*, *logvol*
    - =lvm=yes= :: use LVM for swap and non-boot filesystems
    - =lvm=no= :: use primary partitions for swap and non-boot filesystems
-   Default behavior does not use LVM, but /this argument is ignored for RAID/ (see =part= below), which always uses LVM.
+   Default behavior does not use LVM.
 ** =part=
    *autopart*, *part*, *raid*, *volgroup*, *logvol*
    - =part=std= :: install only on first disk (this nonetheless clears partitions on /all/ disks, though)
