@@ -4,8 +4,8 @@
   - =default= :: kickstart file specified by the DHCP/BOOTP server; instructs PXE client to load =dynamic.ks=
   - =dynamic.ks= :: baseline kickstart file that downloads and executes =mkksconfig=
   - =mkksconfig= :: script that completes the kickstart configuration by creating =/tmp/custom.ks= based on default values and kernel arguments
-  - =pkg.generic= :: list of default packages to be installed during installation
-  - =user.generic= :: definitions of default users to be added during installation
+  - =pkg.std= :: list of default packages to be installed during installation
+  - =user.std= :: definitions of default users to be added during installation
   - =send-email.py= :: Python script for sendmail e-mail notification after installation
 
 References to /installation directory/ refer to the location of =mkksconfig=.
@@ -43,20 +43,15 @@ References to /installation directory/ refer to the location of =mkksconfig=.
 ** =user=
    *user*; users added are determined by contents of installation directory's =user.*= files. For a new =user= value, just add a new =user.*= file.
    - =user=std= :: add =tech= account
-   - =user=itc= :: add =tech= account and accounts for ITC administrators
    Default behavior adds no user accounts.
 ** =pkg=
    *%packages*; packages added are determined by contents of =install.mycolo.biz:/tftpboot/linux-install/centos/pkg.*= files. For a new =pkg= value, just add a new =pkg.*= file.
    - =pkg=std= :: add standard packages (intended for =post=std=)
-   - =pkg=browser= :: add standard packages and web browser (intended for =post=std=); intended for remote display and not really a "browser" configuration (CentOS 6)
-   - =pkg=itc= :: add packages for ITC configurations (intended for =post=itc=)
-   - =pkg=cpanel= :: exclude packages unwanted for WHM/cPanel (intended for =post=cpanel=)
+   - =pkg=min= :: add minimal packages (intended for =post=min=)
 ** =swap=
    *logvol swap* or *part swap*; specifies the swap size in megabytes or a factor by which to multiply the RAM size, followed by =x= (i.e. =swap=4x= will configure four times as much swap space as the size of physical memory).
 ** =post=
    *%post*
    - =post=std= :: use =postinstall-std= post-installation script
-   - =post=itc= :: use =postinstall-itc= post-installation script
-   - =post=cpanel= :: use =postinstall-cpanel= post-installation script
 ** =email=
    Specifies e-mail address for notification upon completion of installation.

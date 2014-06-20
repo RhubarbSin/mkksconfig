@@ -3,7 +3,7 @@
 # mkksconfig: write kickstart config based on environment variables;
 # intended to be called from %pre section of a generic kickstart file
 #
-# 	$Id: mkksconfig,v 1.24 2014/05/22 18:43:33 netinstall Exp $
+# 	$Id: mkksconfig,v 1.25 2014/06/20 14:46:30 netinstall Exp $
 #
 ########################################################################
 #
@@ -275,7 +275,6 @@ function write_packages() {
     # $1: choice of package definition
 
     [ -z "$1" ] && return
-    echo "%packages" >> "$CONFIG"
     PKGFILE="pkg.$1"
     URL="${BASE_URL}/linux-install/centos/$PKGFILE"
     wget -q -O - "$URL" >> "$CONFIG"

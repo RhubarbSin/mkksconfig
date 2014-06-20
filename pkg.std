@@ -1,3 +1,4 @@
 # packages for pkg=std or pkg=generic
+%packages
 firstboot
 ntp

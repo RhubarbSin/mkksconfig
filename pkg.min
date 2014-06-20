@@ -1,0 +1,5 @@
+# packages for pkg=min
+%packages --ignoremissing --excludedocs
+@core
+@base
+ssh
