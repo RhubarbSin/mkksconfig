@@ -326,7 +326,7 @@ wget -nv -O - $URL | python - $2
 EOF
     fi
 
-    cat <<EOF >> "$CONFIG"
+    # cat <<EOF >> "$CONFIG"
 # kickstart's "reboot" option is unreliable
 # ...unfortunately, this can do bad things to md devices...
 # sync; sync; echo b > /proc/sysrq-trigger
